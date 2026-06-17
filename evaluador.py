@@ -42,6 +42,10 @@ def determinar_estado(coincidencia: Any, diferencia_porcentual: Any, margen: flo
 
     if coincidencia_texto == "alta" and diferencia is not None and diferencia <= margen:
         return "Alta coincidencia"
+    if coincidencia_texto == "alta" and diferencia is not None and diferencia > margen:
+        return "Revisar por precio"
+    if coincidencia_texto == "media" and diferencia is not None and diferencia > margen:
+        return "Revisar por precio"
     if coincidencia_texto in ["alta", "media"]:
         return "Media coincidencia"
     if coincidencia_texto == "baja":

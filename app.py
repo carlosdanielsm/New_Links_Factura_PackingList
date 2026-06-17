@@ -92,7 +92,7 @@ st.divider()
 
 st.subheader("Búsqueda automática")
 st.write(
-    "Primero prueba con los 20 productos. El sistema buscará páginas directas de producto. Las páginas de búsqueda/listado no se guardan como recomendación."
+    "Primero prueba con los 20 productos. El sistema buscará páginas directas de producto. Las páginas de búsqueda/listado no se guardan como recomendación y los productos con precio fuera del margen configurado quedan para revisión."
 )
 
 busq1, busq2 = st.columns([1, 3])
@@ -100,7 +100,7 @@ with busq1:
     ejecutar_busqueda = st.button("Buscar links automáticamente", use_container_width=True)
 with busq2:
     st.warning(
-        "Para 600 productos puede demorar. Si solo se encuentra una página de búsqueda, el link recomendado quedará vacío y se enviará a revisión.",
+        "Para 600 productos puede demorar. Si solo se encuentra una página de búsqueda o si el precio está fuera del margen, el link recomendado quedará vacío y se enviará a revisión.",
         icon="⚠️",
     )
 
@@ -122,6 +122,7 @@ if ejecutar_busqueda:
                 total_unit=total_unit,
                 price=price,
                 usar_made_in_china=usar_made_in_china,
+                margen_precio=margen_precio,
             )
             for columna, valor in resultado.items():
                 df.at[idx, columna] = valor

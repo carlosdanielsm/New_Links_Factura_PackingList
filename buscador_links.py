@@ -1,12 +1,14 @@
 """
 Buscador de candidatos para Alibaba y Made in China.
 
-Versión MVP 3:
+Versión MVP 4:
 - Busca candidatos usando resultados web de DuckDuckGo/DDGS.
 - NO coloca páginas de búsqueda/listados como link recomendado.
 - Solo acepta URLs que parezcan páginas de producto directo.
 - Aplica filtros básicos para evitar recomendaciones claramente equivocadas
   (por ejemplo: zapatos deportivos vs tacones).
+- Si el precio detectado está fuera del margen permitido, NO lo marca como
+  recomendado; lo deja como alternativa para revisión manual.
 - Si no hay un producto directo confiable, deja LINK_RECOMENDADO vacío y coloca
   la búsqueda en URL_BUSQUEDA_REFERENCIA para revisión manual.
 
@@ -396,11 +398,57 @@ def _url_referencia_compuesta(producto_ingles: str, usar_made_in_china: bool) ->
     return " | ".join(urls)
 
 
+def _precio_dentro_margen(diferencia: Any, margen_precio: float) -> bool:
+    try:
+        return abs(float(diferencia)) <= float(margen_precio)
+    except (TypeError, ValueError):
+        return False
+
+
+def _tiene_precio_fuera_margen(candidato: dict[str, Any], margen_precio: float) -> bool:
+    precio = candidato.get("precio_detectado")
+    diferencia = candidato.get("diferencia_precio")
+    if precio in [None, ""] or diferencia in [None, ""]:
+        return False
+    return not _precio_dentro_margen(diferencia, margen_precio)
+
+
+def _primer_candidato_recomendable(candidatos: list[dict[str, Any]], margen_precio: float) -> dict[str, Any] | None:
+    """
+    Devuelve un candidato que realmente pueda ir en LINK_RECOMENDADO.
+
+    Reglas:
+    - Debe tener buena coincidencia de producto.
+    - Si tiene precio detectado, debe estar dentro del margen configurado.
+    - Si no tiene precio detectado, puede recomendarse solo como coincidencia media
+      para revisión humana, nunca como alta coincidencia.
+    """
+    for candidato in candidatos:
+        score_producto = float(candidato.get("score_producto") or 0)
+        precio = candidato.get("precio_detectado")
+        diferencia = candidato.get("diferencia_precio")
+
+        if score_producto < 75:
+            continue
+
+        if precio not in [None, ""] and diferencia not in [None, ""]:
+            if _precio_dentro_margen(diferencia, margen_precio):
+                return candidato
+            continue
+
+        # Sin precio, pero producto parece bueno: se puede mostrar como recomendado
+        # para que el usuario revise manualmente el precio por rango/cantidad.
+        return candidato
+
+    return None
+
+
 def construir_resultado_para_excel(
     producto_ingles: str,
     total_unit: int | float | str,
     price: float | str,
     usar_made_in_china: bool = True,
+    margen_precio: float = 20,
 ) -> dict[str, Any]:
     """Devuelve una fila lista para rellenar columnas nuevas del Excel."""
     candidatos = buscar_candidatos(
@@ -422,44 +470,73 @@ def construir_resultado_para_excel(
             "URL_BUSQUEDA_REFERENCIA": _url_referencia_compuesta(producto_ingles, usar_made_in_china),
         }
 
-    # Si el mejor candidato es demasiado débil, NO lo ponemos como recomendado.
-    mejor = candidatos[0]
-    score_producto = float(mejor.get("score_producto") or 0)
-    diferencia = mejor.get("diferencia_precio")
-    precio = mejor.get("precio_detectado")
+    # En V4 no basta con que sea una página directa: si el precio detectado
+    # está muy separado del PRICE, no debe quedar como recomendado.
+    mejor_global = candidatos[0]
+    recomendado = _primer_candidato_recomendable(candidatos, margen_precio)
 
-    if score_producto < 55:
+    # Las alternativas son apoyo manual. Pueden quedar fuera de precio, pero no se aprueban automáticamente.
+    enlaces_alternativos = []
+    for candidato in candidatos:
+        link = candidato.get("link", "")
+        if link and link not in enlaces_alternativos:
+            if recomendado is None or link != recomendado.get("link", ""):
+                enlaces_alternativos.append(link)
+        if len(enlaces_alternativos) >= 2:
+            break
+
+    alt1 = enlaces_alternativos[0] if len(enlaces_alternativos) > 0 else ""
+    alt2 = enlaces_alternativos[1] if len(enlaces_alternativos) > 1 else ""
+
+    if recomendado is None:
+        precio_mejor = mejor_global.get("precio_detectado")
+        diferencia_mejor = mejor_global.get("diferencia_precio")
+        score_mejor = float(mejor_global.get("score_producto") or 0)
+
+        if _tiene_precio_fuera_margen(mejor_global, margen_precio):
+            motivo = (
+                f"Se encontraron productos directos, pero el mejor precio detectado "
+                f"está fuera del margen ±{margen_precio}%. "
+                f"Precio detectado: {precio_mejor}; diferencia: {round(float(diferencia_mejor), 2)}%. "
+                "Se deja como alternativa, no como link recomendado."
+            )
+            coincidencia = "Baja"
+        elif score_mejor < 75:
+            motivo = "Se encontraron páginas directas, pero la coincidencia del producto fue insuficiente. Revisar alternativas manualmente."
+            coincidencia = "Baja"
+        else:
+            motivo = "Se encontraron candidatos, pero ninguno cumple simultáneamente producto y precio. Revisar alternativas manualmente."
+            coincidencia = "Baja"
+
         return {
             "LINK_RECOMENDADO": "",
             "PLATAFORMA_RESULTADO": "",
-            "PRECIO_ENCONTRADO": "",
-            "COINCIDENCIA_PRODUCTO": "Baja",
-            "MOTIVO_SELECCION": "Se encontraron páginas directas, pero la coincidencia del producto fue baja. Revisar alternativas manualmente.",
-            "LINK_ALTERNATIVO_1": mejor.get("link", ""),
-            "LINK_ALTERNATIVO_2": candidatos[1]["link"] if len(candidatos) > 1 else "",
+            "PRECIO_ENCONTRADO": "" if precio_mejor in [None, ""] else precio_mejor,
+            "COINCIDENCIA_PRODUCTO": coincidencia,
+            "MOTIVO_SELECCION": motivo,
+            "LINK_ALTERNATIVO_1": mejor_global.get("link", ""),
+            "LINK_ALTERNATIVO_2": alt1 if alt1 != mejor_global.get("link", "") else alt2,
             "URL_BUSQUEDA_REFERENCIA": _url_referencia_compuesta(producto_ingles, usar_made_in_china),
         }
 
-    alt1 = candidatos[1]["link"] if len(candidatos) > 1 else ""
-    alt2 = candidatos[2]["link"] if len(candidatos) > 2 else ""
+    score_producto = float(recomendado.get("score_producto") or 0)
+    diferencia = recomendado.get("diferencia_precio")
+    precio = recomendado.get("precio_detectado")
 
-    if score_producto >= 75 and diferencia is not None and abs(float(diferencia)) <= 20:
+    if precio not in [None, ""] and diferencia not in [None, ""] and _precio_dentro_margen(diferencia, margen_precio):
         coincidencia = "Alta"
-        motivo = "Página directa de producto, alta similitud y precio dentro del margen ±20%."
-    elif score_producto >= 75 and precio is None:
+        motivo = f"Página directa de producto, alta similitud y precio dentro del margen ±{margen_precio}%."
+    elif score_producto >= 75 and precio in [None, ""]:
         coincidencia = "Media"
-        motivo = "Página directa de producto con alta similitud, pero no se pudo detectar precio. Revisar precio por cantidad."
-    elif score_producto >= 60:
+        motivo = "Página directa de producto con alta similitud, pero no se pudo detectar precio. Revisar precio por cantidad antes de aprobar."
+    else:
         coincidencia = "Media"
         motivo = "Página directa de producto posiblemente compatible. Revisar precio, cantidad y especificaciones."
-    else:
-        coincidencia = "Baja"
-        motivo = "Página directa encontrada, pero la coincidencia es baja. Revisar antes de aprobar."
 
     return {
-        "LINK_RECOMENDADO": mejor.get("link", ""),
-        "PLATAFORMA_RESULTADO": mejor.get("platform", ""),
-        "PRECIO_ENCONTRADO": "" if precio is None else precio,
+        "LINK_RECOMENDADO": recomendado.get("link", ""),
+        "PLATAFORMA_RESULTADO": recomendado.get("platform", ""),
+        "PRECIO_ENCONTRADO": "" if precio in [None, ""] else precio,
         "COINCIDENCIA_PRODUCTO": coincidencia,
         "MOTIVO_SELECCION": motivo,
         "LINK_ALTERNATIVO_1": alt1,

@@ -1,14 +1,13 @@
-# Buscador IA de Links de Productos - MVP v3
+# Buscador IA de Links de Productos - MVP v4
 
-Sistema interno en Streamlit para cargar un Excel de productos, buscar candidatos y exportar un Excel final con columnas nuevas.
+Aplicación interna en Streamlit para cargar un Excel de productos, buscar posibles links y exportar un Excel final con nuevas columnas.
 
-## Cambios de v3
+## Cambios de la v4
 
-- Ya no se colocan páginas de búsqueda/listado como `LINK_RECOMENDADO`.
-- Se filtran URLs de Alibaba para aceptar principalmente `/product-detail/`.
-- Se filtran URLs de Made in China para evitar `products-search`, `hot-china-products`, `product-list`, etc.
-- Si no hay una página directa confiable, `LINK_RECOMENDADO` queda vacío y se llena `URL_BUSQUEDA_REFERENCIA` solo como apoyo manual.
-- Se agregan filtros básicos para evitar errores obvios, por ejemplo: zapatos deportivos vs tacones/formales, niños vs adultos, pantalones vs calzado.
+- Mantiene el filtro de la v3 para evitar guardar páginas de búsqueda/listado como `LINK_RECOMENDADO`.
+- Agrega control estricto de precio: si el precio detectado está fuera del margen configurado, el sistema **no** lo coloca como `LINK_RECOMENDADO`; lo deja como alternativa para revisión manual.
+- El margen se controla desde el panel izquierdo, por defecto ±20%.
+- Agrega estado `Revisar por precio` cuando hay producto similar pero precio lejano.
 
 ## Instalación
 
@@ -19,21 +18,20 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-También puedes ejecutar `ejecutar_app.bat` en Windows.
+## Uso recomendado
 
-## Flujo recomendado de prueba
-
-1. Subir el Excel.
+1. Subir el Excel original.
 2. Seleccionar `Primeros 20 productos`.
 3. Presionar `Buscar links automáticamente`.
-4. Revisar principalmente `LINK_RECOMENDADO`.
-5. Si el link recomendado está vacío, revisar `URL_BUSQUEDA_REFERENCIA` manualmente.
-6. Aprobar solo productos realmente correctos.
-7. Descargar el Excel final.
+4. Revisar especialmente:
+   - `LINK_RECOMENDADO`
+   - `PRECIO_ENCONTRADO`
+   - `DIFERENCIA_PRECIO`
+   - `ESTADO_REVISION`
+   - `MOTIVO_SELECCION`
+5. Aprobar solo productos correctos.
+6. Descargar el Excel final.
 
-## Limitaciones actuales
+## Nota
 
-- Esta versión usa búsqueda web por DDGS. No abre producto por producto para extraer datos internos.
-- El precio puede quedar vacío si no aparece en el resultado de búsqueda.
-- Todavía no calcula con total precisión los rangos de precio por cantidad cuando esa información solo aparece dentro de la página de Alibaba.
-- Para una versión robusta se recomienda conectar una API/servicio de datos autorizado o un extractor estructurado de páginas de producto.
+Esta versión usa resultados web como MVP. No evade CAPTCHA y no garantiza lectura completa de todos los rangos de precio de Alibaba. La siguiente mejora recomendada es conectar una fuente de datos estructurada/API o un extractor autorizado que permita leer precios por cantidad desde la ficha del producto.
