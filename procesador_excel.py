@@ -9,6 +9,7 @@ COLUMNAS_NUEVAS = [
     "MOTIVO_SELECCION",
     "LINK_ALTERNATIVO_1",
     "LINK_ALTERNATIVO_2",
+    "URL_BUSQUEDA_REFERENCIA",
     "ESTADO_REVISION",
     "APROBADO_POR_USUARIO",
     "FECHA_REVISION",
@@ -29,5 +30,5 @@ def preparar_dataframe_resultados(df: pd.DataFrame) -> pd.DataFrame:
             resultado[columna] = ""
 
     resultado["ESTADO_REVISION"] = "Pendiente"
-    resultado["MOTIVO_SELECCION"] = "Pendiente de conectar buscador real"
+    resultado["MOTIVO_SELECCION"] = "Pendiente de búsqueda automática"
     return resultado

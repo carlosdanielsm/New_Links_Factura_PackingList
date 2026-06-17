@@ -30,10 +30,11 @@ def calcular_diferencia_porcentual(precio_objetivo: Any, precio_encontrado: Any)
 def determinar_estado(coincidencia: Any, diferencia_porcentual: Any, margen: float, link: Any) -> str:
     """Determina el estado de revisión según coincidencia, precio y existencia de link."""
     link_valido = isinstance(link, str) and link.strip().startswith(("http://", "https://"))
-    if not link_valido:
-        return "Pendiente"
-
     coincidencia_texto = str(coincidencia or "").strip().lower()
+    if not link_valido:
+        if coincidencia_texto in ["baja", "no encontrado", "no encontrada"]:
+            return "No encontrado"
+        return "Pendiente"
     try:
         diferencia = abs(float(diferencia_porcentual))
     except (TypeError, ValueError):

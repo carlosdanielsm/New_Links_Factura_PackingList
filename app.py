@@ -23,7 +23,7 @@ COLUMNAS_OBLIGATORIAS = [
 ]
 
 st.title("🔎 Buscador IA de Links de Productos")
-st.caption("MVP interno: carga Excel, busca candidatos, revisa resultados, aprueba links y exporta un Excel final.")
+st.caption("MVP interno: carga Excel, busca páginas directas de producto, revisa resultados, aprueba links y exporta un Excel final.")
 
 with st.sidebar:
     st.header("Configuración")
@@ -46,8 +46,8 @@ with st.sidebar:
         help="Primero busca en Alibaba. Si no hay buen resultado, también trae candidatos desde Made in China.",
     )
     st.info(
-        "Esta versión usa búsqueda web de candidatos. No evade CAPTCHA ni hace scraping agresivo. "
-        "Si no detecta precio, deja el producto para revisión."
+        "Esta versión usa búsqueda web de candidatos y filtra páginas de búsqueda/listado. No evade CAPTCHA ni hace scraping agresivo. "
+        "Si no detecta página directa o precio, deja el producto para revisión."
     )
 
 archivo = st.file_uploader("Subir Excel", type=["xlsx"])
@@ -92,7 +92,7 @@ st.divider()
 
 st.subheader("Búsqueda automática")
 st.write(
-    "Primero prueba con los 20 productos. El sistema buscará candidatos y rellenará link recomendado, plataforma, precio encontrado si se detecta, alternativas y motivo."
+    "Primero prueba con los 20 productos. El sistema buscará páginas directas de producto. Las páginas de búsqueda/listado no se guardan como recomendación."
 )
 
 busq1, busq2 = st.columns([1, 3])
@@ -100,7 +100,7 @@ with busq1:
     ejecutar_busqueda = st.button("Buscar links automáticamente", use_container_width=True)
 with busq2:
     st.warning(
-        "Para 600 productos puede demorar y algunos resultados pueden quedar en revisión si el precio no aparece en el resultado de búsqueda.",
+        "Para 600 productos puede demorar. Si solo se encuentra una página de búsqueda, el link recomendado quedará vacío y se enviará a revisión.",
         icon="⚠️",
     )
 
@@ -173,7 +173,7 @@ st.divider()
 
 st.subheader("Tabla de revisión")
 st.write(
-    "Edita `LINK_RECOMENDADO`, `PRECIO_ENCONTRADO`, `COINCIDENCIA_PRODUCTO` y `APROBADO_POR_USUARIO` según corresponda. "
+    "Edita `LINK_RECOMENDADO`, `PRECIO_ENCONTRADO`, `COINCIDENCIA_PRODUCTO` y `APROBADO_POR_USUARIO` según corresponda. No apruebes URLs de búsqueda/listado. "
     "El sistema recalculará diferencia y estado."
 )
 
@@ -191,6 +191,7 @@ columnas_visibles = [
     "MOTIVO_SELECCION",
     "LINK_ALTERNATIVO_1",
     "LINK_ALTERNATIVO_2",
+    "URL_BUSQUEDA_REFERENCIA",
     "ESTADO_REVISION",
     "APROBADO_POR_USUARIO",
     "FECHA_REVISION",
@@ -237,6 +238,7 @@ edited_df = st.data_editor(
         "LINK_RECOMENDADO": st.column_config.LinkColumn("LINK_RECOMENDADO"),
         "LINK_ALTERNATIVO_1": st.column_config.LinkColumn("LINK_ALTERNATIVO_1"),
         "LINK_ALTERNATIVO_2": st.column_config.LinkColumn("LINK_ALTERNATIVO_2"),
+        "URL_BUSQUEDA_REFERENCIA": st.column_config.TextColumn("URL_BUSQUEDA_REFERENCIA"),
     },
 )
 
