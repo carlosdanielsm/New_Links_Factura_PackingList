@@ -1,15 +1,39 @@
-# Buscador IA de Links de Productos - MVP v4
+# Buscador IA de Links de Productos - MVP V6
 
-Aplicación interna en Streamlit para cargar un Excel de productos, buscar posibles links y exportar un Excel final con nuevas columnas.
+Versión interna de prueba para buscar links de productos tomando como base un Excel.
 
-## Cambios de la v4
+## Qué cambia en V6
 
-- Mantiene el filtro de la v3 para evitar guardar páginas de búsqueda/listado como `LINK_RECOMENDADO`.
-- Agrega control estricto de precio: si el precio detectado está fuera del margen configurado, el sistema **no** lo coloca como `LINK_RECOMENDADO`; lo deja como alternativa para revisión manual.
-- El margen se controla desde el panel izquierdo, por defecto ±20%.
-- Agrega estado `Revisar por precio` cuando hay producto similar pero precio lejano.
+Esta versión vuelve a la lógica práctica de la V4, pero agrega una mejora:
 
-## Instalación
+- Intenta leer el título del `LINKS ORIGINAL`.
+- Usa ese título como referencia principal para buscar productos similares.
+- Usa `DESCRIPTION NUEVA INGLES` como apoyo y como respaldo si no se puede leer el título original.
+- Mantiene los filtros de V4:
+  - evita páginas de búsqueda/listado;
+  - acepta páginas directas de producto;
+  - valida precio contra el margen configurado;
+  - si el precio está fuera del margen, deja el link como alternativa y no como recomendado.
+
+Para no cargar tanto la tabla, solo agrega una columna extra de diagnóstico:
+
+- `TITULO_LINK_ORIGINAL`
+
+Esta columna sirve para verificar qué producto entendió el sistema desde el link original.
+
+## Uso
+
+1. Descomprimir el ZIP.
+2. Abrir PowerShell o CMD dentro de la carpeta.
+3. Ejecutar:
+
+```bash
+.venv\Scripts\activate
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+Si no existe el entorno virtual:
 
 ```bash
 python -m venv .venv
@@ -18,20 +42,19 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Uso recomendado
+## Prueba recomendada
 
-1. Subir el Excel original.
-2. Seleccionar `Primeros 20 productos`.
-3. Presionar `Buscar links automáticamente`.
-4. Revisar especialmente:
+1. Subir el Excel.
+2. Procesar primeros 20 productos.
+3. Mantener activo `Usar título del link original como referencia`.
+4. Revisar:
+   - `TITULO_LINK_ORIGINAL`
    - `LINK_RECOMENDADO`
-   - `PRECIO_ENCONTRADO`
-   - `DIFERENCIA_PRECIO`
-   - `ESTADO_REVISION`
+   - `LINK_ALTERNATIVO_1`
+   - `LINK_ALTERNATIVO_2`
    - `MOTIVO_SELECCION`
-5. Aprobar solo productos correctos.
-6. Descargar el Excel final.
+5. Confirmar si el recomendado se parece al producto real del link original.
 
 ## Nota
 
-Esta versión usa resultados web como MVP. No evade CAPTCHA y no garantiza lectura completa de todos los rangos de precio de Alibaba. La siguiente mejora recomendada es conectar una fuente de datos estructurada/API o un extractor autorizado que permita leer precios por cantidad desde la ficha del producto.
+Esta versión no evade CAPTCHA ni hace scraping agresivo. Usa búsqueda web y lectura básica de metadatos del link original.

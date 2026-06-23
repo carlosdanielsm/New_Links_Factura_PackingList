@@ -23,7 +23,7 @@ COLUMNAS_OBLIGATORIAS = [
 ]
 
 st.title("🔎 Buscador IA de Links de Productos")
-st.caption("MVP interno: carga Excel, busca páginas directas de producto, revisa resultados, aprueba links y exporta un Excel final.")
+st.caption("MVP interno V6: vuelve a la lógica práctica de la V4, pero usa el título del LINKS ORIGINAL como referencia principal cuando se puede leer.")
 
 with st.sidebar:
     st.header("Configuración")
@@ -45,9 +45,14 @@ with st.sidebar:
         value=True,
         help="Primero busca en Alibaba. Si no hay buen resultado, también trae candidatos desde Made in China.",
     )
+    usar_titulo_original = st.checkbox(
+        "Usar título del link original como referencia",
+        value=True,
+        help="Si se puede leer el LINKS ORIGINAL, el sistema toma ese título como referencia principal y usa DESCRIPTION NUEVA INGLES como apoyo.",
+    )
     st.info(
-        "Esta versión usa búsqueda web de candidatos y filtra páginas de búsqueda/listado. No evade CAPTCHA ni hace scraping agresivo. "
-        "Si no detecta página directa o precio, deja el producto para revisión."
+        "Esta versión usa búsqueda web de candidatos, filtra páginas de búsqueda/listado y valida precio. "
+        "Si no puede leer el título del link original, vuelve al comportamiento anterior usando DESCRIPTION NUEVA INGLES."
     )
 
 archivo = st.file_uploader("Subir Excel", type=["xlsx"])
@@ -92,7 +97,7 @@ st.divider()
 
 st.subheader("Búsqueda automática")
 st.write(
-    "Primero prueba con los 20 productos. El sistema buscará páginas directas de producto. Las páginas de búsqueda/listado no se guardan como recomendación y los productos con precio fuera del margen configurado quedan para revisión."
+    "Primero prueba con los 20 productos. El sistema intentará leer el título del LINKS ORIGINAL y lo usará como referencia principal. Si no puede leerlo, buscará con DESCRIPTION NUEVA INGLES como en la versión anterior."
 )
 
 busq1, busq2 = st.columns([1, 3])
@@ -114,6 +119,7 @@ if ejecutar_busqueda:
         producto = df.at[idx, "DESCRIPTION NUEVA INGLES"]
         total_unit = df.at[idx, "TOTAL UNIT"]
         price = df.at[idx, "PRICE"]
+        link_original = df.at[idx, "LINKS ORIGINAL"]
 
         status.write(f"Buscando {pos}/{total}: {producto}")
         try:
@@ -121,6 +127,8 @@ if ejecutar_busqueda:
                 producto_ingles=producto,
                 total_unit=total_unit,
                 price=price,
+                link_original=link_original,
+                usar_titulo_original=usar_titulo_original,
                 usar_made_in_china=usar_made_in_china,
                 margen_precio=margen_precio,
             )
@@ -175,7 +183,7 @@ st.divider()
 st.subheader("Tabla de revisión")
 st.write(
     "Edita `LINK_RECOMENDADO`, `PRECIO_ENCONTRADO`, `COINCIDENCIA_PRODUCTO` y `APROBADO_POR_USUARIO` según corresponda. No apruebes URLs de búsqueda/listado. "
-    "El sistema recalculará diferencia y estado."
+    "`TITULO_LINK_ORIGINAL` solo sirve para ver qué referencia tomó el sistema."
 )
 
 columnas_visibles = [
@@ -184,6 +192,7 @@ columnas_visibles = [
     "TOTAL UNIT",
     "PRICE",
     "LINKS ORIGINAL",
+    "TITULO_LINK_ORIGINAL",
     "LINK_RECOMENDADO",
     "PLATAFORMA_RESULTADO",
     "PRECIO_ENCONTRADO",
@@ -236,6 +245,7 @@ edited_df = st.data_editor(
             disabled=True,
         ),
         "LINKS ORIGINAL": st.column_config.LinkColumn("LINKS ORIGINAL"),
+        "TITULO_LINK_ORIGINAL": st.column_config.TextColumn("TITULO_LINK_ORIGINAL", disabled=True),
         "LINK_RECOMENDADO": st.column_config.LinkColumn("LINK_RECOMENDADO"),
         "LINK_ALTERNATIVO_1": st.column_config.LinkColumn("LINK_ALTERNATIVO_1"),
         "LINK_ALTERNATIVO_2": st.column_config.LinkColumn("LINK_ALTERNATIVO_2"),

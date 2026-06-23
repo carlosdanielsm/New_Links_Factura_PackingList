@@ -1,16 +1,15 @@
 """
 Buscador de candidatos para Alibaba y Made in China.
 
-Versión MVP 4:
-- Busca candidatos usando resultados web de DuckDuckGo/DDGS.
-- NO coloca páginas de búsqueda/listados como link recomendado.
-- Solo acepta URLs que parezcan páginas de producto directo.
-- Aplica filtros básicos para evitar recomendaciones claramente equivocadas
-  (por ejemplo: zapatos deportivos vs tacones).
-- Si el precio detectado está fuera del margen permitido, NO lo marca como
-  recomendado; lo deja como alternativa para revisión manual.
-- Si no hay un producto directo confiable, deja LINK_RECOMENDADO vacío y coloca
-  la búsqueda en URL_BUSQUEDA_REFERENCIA para revisión manual.
+Versión MVP 6:
+- Mantiene la lógica práctica de la V4: encuentra páginas directas de producto,
+  evita páginas de búsqueda/listado y valida precio contra el margen configurado.
+- Mejora la referencia del producto usando el título del LINKS ORIGINAL cuando se
+  puede leer.
+- Si no puede leer el link original, vuelve automáticamente al comportamiento de
+  la V4 usando DESCRIPTION NUEVA INGLES.
+- No agrega muchas columnas de diagnóstico: solo TITULO_LINK_ORIGINAL para validar
+  qué entendió del link original.
 
 IMPORTANTE:
 Esta capa sirve para validar el flujo con 20 productos. Para una versión robusta
@@ -25,8 +24,14 @@ import re
 import time
 import unicodedata
 from dataclasses import dataclass
+from html import unescape
 from typing import Any
 from urllib.parse import quote_plus, urlparse
+
+try:
+    import requests
+except Exception:  # pragma: no cover
+    requests = None
 
 try:
     from ddgs import DDGS
@@ -43,7 +48,56 @@ STOPWORDS = {
     "manufacturers", "china", "chinese", "wholesale", "custom", "new", "hot",
     "sale", "high", "quality", "best", "cheap", "price", "buy", "online",
     "de", "la", "el", "los", "las", "para", "con", "por", "del", "un", "una",
-    "set", "pcs", "piece", "pieces",
+    "set", "pcs", "piece", "pieces", "alibaba", "made", "com",
+}
+
+# Diccionario simple para que un título leído en español desde Alibaba pueda ayudar
+# a buscar/comparar candidatos en inglés. No intenta traducir todo, solo términos de producto.
+SINONIMOS = {
+    "zapato": ["shoe", "shoes"],
+    "zapatos": ["shoe", "shoes"],
+    "calzado": ["shoe", "shoes", "footwear"],
+    "deportivo": ["sport", "sports", "running", "athletic", "sneaker", "sneakers"],
+    "deportivos": ["sport", "sports", "running", "athletic", "sneaker", "sneakers"],
+    "tenis": ["sneaker", "sneakers", "tennis", "shoe", "shoes"],
+    "tacon": ["heel", "heels"],
+    "tacones": ["heel", "heels"],
+    "elegante": ["formal", "dress"],
+    "elegantes": ["formal", "dress"],
+    "sandalia": ["sandal", "sandals"],
+    "sandalias": ["sandal", "sandals"],
+    "bota": ["boot", "boots"],
+    "botas": ["boot", "boots"],
+    "pantalon": ["pant", "pants", "trouser", "trousers"],
+    "pantalones": ["pant", "pants", "trouser", "trousers"],
+    "licra": ["leggings", "legging"],
+    "leggins": ["leggings", "legging"],
+    "nino": ["child", "children", "kid", "kids", "boy", "boys"],
+    "ninos": ["child", "children", "kid", "kids", "boy", "boys"],
+    "nina": ["girl", "girls", "child", "children", "kid", "kids"],
+    "ninas": ["girl", "girls", "child", "children", "kid", "kids"],
+    "bebe": ["baby", "infant", "toddler"],
+    "mujer": ["women", "woman", "ladies"],
+    "mujeres": ["women", "woman", "ladies"],
+    "hombre": ["men", "man"],
+    "hombres": ["men", "man"],
+    "cargador": ["charger", "adapter", "power", "supply"],
+    "bateria": ["battery"],
+    "baterias": ["battery", "batteries"],
+    "iones": ["ion", "ions"],
+    "litio": ["lithium", "li-ion"],
+    "bicicleta": ["bike", "bicycle", "e-bike"],
+    "electrica": ["electric"],
+    "electrico": ["electric"],
+    "moto": ["motorcycle", "scooter"],
+    "scooter": ["scooter"],
+    "corazon": ["heart"],
+    "corazones": ["heart", "hearts"],
+    "estampado": ["print", "printed", "pattern"],
+    "impreso": ["print", "printed"],
+    "cintura": ["waist"],
+    "elastica": ["elastic"],
+    "elastico": ["elastic"],
 }
 
 PLATFORM_CONFIG = {
@@ -66,6 +120,8 @@ class Candidate:
     platform: str
     precio_detectado: float | None
     score_producto: float
+    score_vs_excel: float
+    score_vs_original: float
     diferencia_precio: float | None
     score_final: float
     motivo_filtro: str = ""
@@ -78,6 +134,8 @@ class Candidate:
             "platform": self.platform,
             "precio_detectado": self.precio_detectado,
             "score_producto": round(self.score_producto, 2),
+            "score_vs_excel": round(self.score_vs_excel, 2),
+            "score_vs_original": round(self.score_vs_original, 2),
             "diferencia_precio": None if self.diferencia_precio is None else round(self.diferencia_precio, 2),
             "score_final": round(self.score_final, 2),
             "motivo_filtro": self.motivo_filtro,
@@ -96,8 +154,26 @@ def _normalizar(texto: Any) -> str:
     return texto
 
 
+def _limpiar_titulo(titulo: Any) -> str:
+    texto = unescape(str(titulo or "")).strip()
+    texto = re.sub(r"\s+", " ", texto)
+    texto = re.sub(r"\s*[-|]\s*(Alibaba\.com|Made-in-China\.com|Made in China).*$", "", texto, flags=re.IGNORECASE)
+    return texto[:350]
+
+
+def _expandir_con_sinonimos(texto: Any) -> str:
+    normal = _normalizar(texto)
+    tokens = re.findall(r"[a-z0-9]+(?:[.+\-/][a-z0-9]+)*", normal)
+    extras: list[str] = []
+    for token in tokens:
+        extras.extend(SINONIMOS.get(token, []))
+    if extras:
+        return f"{normal} {' '.join(extras)}"
+    return normal
+
+
 def _tokens(texto: Any) -> set[str]:
-    texto = _normalizar(texto)
+    texto = _expandir_con_sinonimos(texto)
     raw_tokens = re.findall(r"[a-z0-9]+(?:[.+\-/][a-z0-9]+)*", texto)
     return {t for t in raw_tokens if len(t) >= 2 and t not in STOPWORDS}
 
@@ -149,7 +225,11 @@ def _extraer_precios(texto: str) -> list[float]:
         except ValueError:
             pass
 
-    return [p for p in precios if 0 < p < 100000]
+    salida: list[float] = []
+    for precio in precios:
+        if 0 < precio < 100000 and precio not in salida:
+            salida.append(precio)
+    return salida
 
 
 def _seleccionar_precio_mas_cercano(precios: list[float], price_objetivo: Any) -> float | None:
@@ -169,13 +249,12 @@ def _diferencia_porcentual(price_objetivo: Any, precio_encontrado: Any) -> float
     return ((encontrado - objetivo) / objetivo) * 100
 
 
-def _score_texto(producto: str, title: str, snippet: str) -> float:
+def _score_texto(producto: str, title: str, snippet: str = "") -> float:
     producto_tokens = _tokens(producto)
     candidato_tokens = _tokens(f"{title} {snippet}")
     if not producto_tokens:
         return 0.0
 
-    # Tokens principales: los tokens del producto deben aparecer en el candidato.
     overlap = len(producto_tokens & candidato_tokens) / max(len(producto_tokens), 1)
 
     producto_specs = _tokens_especificaciones(producto)
@@ -192,6 +271,15 @@ def _score_final(score_producto: float, diferencia_precio: float | None) -> floa
     diferencia_abs = abs(diferencia_precio)
     score_precio = max(0.0, 100.0 - min(diferencia_abs, 100.0))
     return (score_producto * 0.72) + (score_precio * 0.28)
+
+
+def _detectar_plataforma(link: str) -> str:
+    netloc = urlparse(str(link or "")).netloc.lower()
+    if "alibaba.com" in netloc:
+        return "Alibaba"
+    if "made-in-china.com" in netloc:
+        return "Made in China"
+    return ""
 
 
 def _link_pertenece_a_plataforma(link: str, platform: str) -> bool:
@@ -211,23 +299,14 @@ def _es_url_producto_valida(link: str, platform: str) -> bool:
     path = parsed.path.lower()
     url = f"{netloc}{path}".lower()
 
-    # Rechazos comunes de páginas de búsqueda/listado/categoría.
-    patrones_rechazo = [
-        "/trade/search", "/products", "/showroom/", "/catalog", "/category", "/supplier",
-        "products-search", "product-list", "company-search", "offer-list", "search",
-        "hot-china-products", "productdirectory",
-    ]
-
     if platform == "Alibaba":
         if "/product-detail/" not in path:
             return False
-        # Si por alguna razón viene mezclado con búsqueda, rechazar.
         return not any(p in path for p in ["/trade/search", "/catalog", "/products"])
 
     if platform == "Made in China":
         if any(p in url for p in ["products-search", "hot-china-products", "product-list", "company-search", "productdirectory"]):
             return False
-        # Made-in-China usa varias estructuras para páginas de producto.
         aceptado = (
             "/product-detail" in path
             or "/product/" in path
@@ -236,7 +315,7 @@ def _es_url_producto_valida(link: str, platform: str) -> bool:
         )
         return bool(aceptado)
 
-    return not any(p in url for p in patrones_rechazo)
+    return False
 
 
 def _hay_conflicto_producto(producto: str, texto_candidato: str) -> str:
@@ -249,34 +328,27 @@ def _hay_conflicto_producto(producto: str, texto_candidato: str) -> str:
     def contiene(tokens: set[str], palabras: set[str]) -> bool:
         return bool(tokens & palabras)
 
-    # Zapatos deportivos no deben recomendar tacones/formales.
     deportivos = {"sport", "sports", "running", "runner", "athletic", "sneaker", "sneakers", "trainer", "trainers", "tennis"}
     tacones_formal = {"heel", "heels", "pump", "pumps", "stiletto", "elegant", "formal", "dress", "loafer", "loafers", "wedding"}
     if contiene(p_tokens, deportivos) and contiene(c_tokens, tacones_formal):
         return "Conflicto: el producto original parece deportivo y el candidato parece tacón/formal."
-
-    # Tacones/formales no deben recomendar deportivos.
     if contiene(p_tokens, tacones_formal) and contiene(c_tokens, deportivos):
         return "Conflicto: el producto original parece formal/tacón y el candidato parece deportivo."
 
-    # Niños vs adultos/mujer/hombre cuando el producto especifica niños.
     ninos = {"child", "children", "kid", "kids", "boy", "boys", "girl", "girls", "baby", "toddler", "infant"}
     adultos = {"women", "woman", "men", "man", "adult", "ladies", "lady"}
     if contiene(p_tokens, ninos) and contiene(c_tokens, adultos) and not contiene(c_tokens, ninos):
         return "Conflicto: el producto original es para niños y el candidato parece de adulto."
 
-    # Pantalones no deben recomendar zapatos, calcetines, patines, etc.
     pantalones = {"pant", "pants", "trouser", "trousers", "leggings", "legging", "shorts"}
     calzado = {"shoe", "shoes", "sneaker", "sneakers", "heel", "heels", "boot", "boots", "sandal", "sandals", "sock", "socks", "skate", "skates"}
     if contiene(p_tokens, pantalones) and contiene(c_tokens, calzado) and not contiene(c_tokens, pantalones):
         return "Conflicto: el producto original es pantalón/ropa inferior y el candidato parece calzado/accesorio."
 
-    # Calzado no debe recomendar ropa.
-    ropa_inferior = pantalones | {"shirt", "shirts", "dress", "jacket", "coat", "hoodie", "legging", "leggings"}
-    if contiene(p_tokens, calzado) and contiene(c_tokens, ropa_inferior) and not contiene(c_tokens, calzado):
+    ropa = pantalones | {"shirt", "shirts", "dress", "jacket", "coat", "hoodie", "legging", "leggings"}
+    if contiene(p_tokens, calzado) and contiene(c_tokens, ropa) and not contiene(c_tokens, calzado):
         return "Conflicto: el producto original es calzado y el candidato parece ropa."
 
-    # Especificaciones técnicas: si el producto trae voltaje/amperaje y el candidato trae otro diferente, penalizar.
     for unidad in ["v", "a", "w", "ah", "mah", "hz"]:
         patron = rf"\b(\d+(?:\.\d+)?)\s?{unidad}\b"
         p_vals = set(re.findall(patron, p))
@@ -285,6 +357,59 @@ def _hay_conflicto_producto(producto: str, texto_candidato: str) -> str:
             return f"Conflicto: especificación {unidad.upper()} diferente entre producto y candidato."
 
     return ""
+
+
+def analizar_link_original(link_original: str, price: Any = None) -> dict[str, Any]:
+    """Lee de forma básica el link original y extrae un título.
+
+    Si Alibaba/Made-in-China bloquea o no devuelve título, la app vuelve al modo V4.
+    """
+    link_original = str(link_original or "").strip()
+    if not link_original.startswith(("http://", "https://")):
+        return {"title": "", "price": None, "status": "Sin link original válido"}
+
+    if requests is None:
+        return {"title": "", "price": None, "status": "No se pudo leer: falta requests"}
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
+    }
+    try:
+        resp = requests.get(link_original, headers=headers, timeout=10, allow_redirects=True)
+        status_code = getattr(resp, "status_code", None)
+        if status_code and status_code >= 400:
+            return {"title": "", "price": None, "status": f"No se pudo leer: HTTP {status_code}"}
+        html = resp.text or ""
+    except Exception as exc:
+        return {"title": "", "price": None, "status": f"No se pudo leer: {exc}"}
+
+    html_sample = html[:400000]
+    title = ""
+    meta_patterns = [
+        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+name=["\']title["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<h1[^>]*>(.*?)</h1>',
+        r'<title[^>]*>(.*?)</title>',
+    ]
+    for patron in meta_patterns:
+        match = re.search(patron, html_sample, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            title = _limpiar_titulo(re.sub(r"<[^>]+>", " ", match.group(1)))
+            if title:
+                break
+
+    text_for_price = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html_sample, flags=re.IGNORECASE | re.DOTALL)
+    text_for_price = re.sub(r"<[^>]+>", " ", text_for_price)
+    text_for_price = unescape(re.sub(r"\s+", " ", text_for_price))[:50000]
+    precios = _extraer_precios(text_for_price)
+    precio = _seleccionar_precio_mas_cercano(precios, price)
+
+    return {
+        "title": title,
+        "price": precio,
+        "status": "Leído correctamente" if title else "Link leído, pero sin título claro",
+    }
 
 
 def _buscar_web(query: str, max_results: int = 8) -> list[dict[str, str]]:
@@ -310,21 +435,53 @@ def _buscar_web(query: str, max_results: int = 8) -> list[dict[str, str]]:
     return salida
 
 
-def _construir_queries(producto_ingles: str, platform: str) -> list[str]:
-    producto = str(producto_ingles or "").strip()
-    producto_simple = " ".join(list(_tokens(producto))[:8]) or producto
+def _tokens_para_query(texto: str, limite: int = 10) -> str:
+    # Specs primero porque son críticas: 72V, 5A, modelos, tallas, etc.
+    specs = list(_tokens_especificaciones(texto))
+    tokens = list(_tokens(texto))
+    ordenados: list[str] = []
+    for token in specs + tokens:
+        if token not in ordenados:
+            ordenados.append(token)
+    return " ".join(ordenados[:limite])
 
+
+def _construir_queries(producto_excel: str, titulo_original: str, platform: str) -> list[str]:
+    excel = str(producto_excel or "").strip()
+    original = str(titulo_original or "").strip()
+    excel_simple = _tokens_para_query(excel, limite=8) or excel
+    original_simple = _tokens_para_query(original, limite=10) or original
+    combinado_simple = _tokens_para_query(f"{original} {excel}", limite=12) or excel_simple
+
+    queries: list[str] = []
     if platform == "Alibaba":
-        return [
-            f'site:alibaba.com/product-detail "{producto}"',
-            f'site:alibaba.com/product-detail {producto_simple}',
-        ]
-    if platform == "Made in China":
-        return [
-            f'site:made-in-china.com "{producto}" "product-detail"',
-            f'site:made-in-china.com {producto_simple} product-detail',
-        ]
-    return [producto]
+        if original:
+            queries.append(f'site:alibaba.com/product-detail "{original}"')
+            queries.append(f'site:alibaba.com/product-detail {original_simple}')
+        # Fallback tipo V4 para que no se quede sin resultados.
+        if excel:
+            queries.append(f'site:alibaba.com/product-detail "{excel}"')
+            queries.append(f'site:alibaba.com/product-detail {excel_simple}')
+        if combinado_simple and combinado_simple not in [excel_simple, original_simple]:
+            queries.append(f'site:alibaba.com/product-detail {combinado_simple}')
+    elif platform == "Made in China":
+        if original:
+            queries.append(f'site:made-in-china.com "{original}" product')
+            queries.append(f'site:made-in-china.com {original_simple} product')
+        if excel:
+            queries.append(f'site:made-in-china.com "{excel}" product')
+            queries.append(f'site:made-in-china.com {excel_simple} product')
+        if combinado_simple and combinado_simple not in [excel_simple, original_simple]:
+            queries.append(f'site:made-in-china.com {combinado_simple} product')
+    else:
+        queries.append(original or excel)
+
+    salida: list[str] = []
+    for q in queries:
+        q = re.sub(r"\s+", " ", q).strip()
+        if q and q not in salida:
+            salida.append(q)
+    return salida
 
 
 def generar_url_busqueda(producto_ingles: str, platform: str) -> str:
@@ -336,17 +493,22 @@ def buscar_candidatos(
     producto_ingles: str,
     total_unit: int | float | str,
     price: float | str,
+    link_original: str = "",
+    usar_titulo_original: bool = True,
     usar_made_in_china: bool = True,
     max_por_fuente: int = 8,
     pausa_segundos: float = 0.35,
-) -> list[dict[str, Any]]:
-    """Busca candidatos web y devuelve solo páginas de producto directo ordenadas por score."""
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Busca candidatos web y devuelve páginas de producto directo ordenadas por score."""
+    original_info = analizar_link_original(link_original, price=price) if usar_titulo_original else {"title": "", "price": None, "status": "No usado"}
+    titulo_original = str(original_info.get("title") or "").strip()
+
     plataformas = ["Alibaba"] + (["Made in China"] if usar_made_in_china else [])
     candidatos: list[Candidate] = []
     vistos: set[str] = set()
 
     for platform in plataformas:
-        for query in _construir_queries(producto_ingles, platform):
+        for query in _construir_queries(producto_ingles, titulo_original, platform):
             resultados = _buscar_web(query, max_results=max_por_fuente)
 
             for resultado in resultados:
@@ -361,15 +523,29 @@ def buscar_candidatos(
                 title = resultado.get("title", "")
                 snippet = resultado.get("snippet", "")
                 texto_candidato = f"{title} {snippet}"
-                conflicto = _hay_conflicto_producto(producto_ingles, texto_candidato)
-                if conflicto:
-                    # No se recomienda, pero tampoco se guarda como candidato para evitar aprobaciones erróneas.
+
+                # Mantener filtros anti-error de la V4, pero también validar contra título original si existe.
+                conflicto_excel = _hay_conflicto_producto(producto_ingles, texto_candidato)
+                conflicto_original = _hay_conflicto_producto(titulo_original, texto_candidato) if titulo_original else ""
+                if conflicto_excel or conflicto_original:
                     continue
 
                 precios = _extraer_precios(texto_candidato)
                 precio_detectado = _seleccionar_precio_mas_cercano(precios, price)
                 diferencia = _diferencia_porcentual(price, precio_detectado)
-                score_producto = _score_texto(producto_ingles, title, snippet)
+
+                score_vs_excel = _score_texto(producto_ingles, title, snippet)
+                score_vs_original = _score_texto(titulo_original, title, snippet) if titulo_original else 0.0
+
+                if titulo_original:
+                    # El título original pesa más, pero no bloquea totalmente al Excel si no hay buena lectura/traducción.
+                    score_producto = max(
+                        (score_vs_original * 0.65) + (score_vs_excel * 0.35),
+                        score_vs_excel * 0.88,
+                    )
+                else:
+                    score_producto = score_vs_excel
+
                 score_total = _score_final(score_producto, diferencia)
 
                 candidatos.append(
@@ -380,6 +556,8 @@ def buscar_candidatos(
                         platform=platform,
                         precio_detectado=precio_detectado,
                         score_producto=score_producto,
+                        score_vs_excel=score_vs_excel,
+                        score_vs_original=score_vs_original,
                         diferencia_precio=diferencia,
                         score_final=score_total,
                     )
@@ -388,13 +566,13 @@ def buscar_candidatos(
             time.sleep(pausa_segundos)
 
     candidatos.sort(key=lambda c: c.score_final, reverse=True)
-    return [c.to_dict() for c in candidatos]
+    return [c.to_dict() for c in candidatos], original_info
 
 
-def _url_referencia_compuesta(producto_ingles: str, usar_made_in_china: bool) -> str:
-    urls = [generar_url_busqueda(producto_ingles, "Alibaba")]
+def _url_referencia_compuesta(referencia: str, usar_made_in_china: bool) -> str:
+    urls = [generar_url_busqueda(referencia, "Alibaba")]
     if usar_made_in_china:
-        urls.append(generar_url_busqueda(producto_ingles, "Made in China"))
+        urls.append(generar_url_busqueda(referencia, "Made in China"))
     return " | ".join(urls)
 
 
@@ -420,15 +598,14 @@ def _primer_candidato_recomendable(candidatos: list[dict[str, Any]], margen_prec
     Reglas:
     - Debe tener buena coincidencia de producto.
     - Si tiene precio detectado, debe estar dentro del margen configurado.
-    - Si no tiene precio detectado, puede recomendarse solo como coincidencia media
-      para revisión humana, nunca como alta coincidencia.
+    - Si no tiene precio detectado, puede recomendarse como media para revisión.
     """
     for candidato in candidatos:
         score_producto = float(candidato.get("score_producto") or 0)
         precio = candidato.get("precio_detectado")
         diferencia = candidato.get("diferencia_precio")
 
-        if score_producto < 75:
+        if score_producto < 70:
             continue
 
         if precio not in [None, ""] and diferencia not in [None, ""]:
@@ -436,8 +613,6 @@ def _primer_candidato_recomendable(candidatos: list[dict[str, Any]], margen_prec
                 return candidato
             continue
 
-        # Sin precio, pero producto parece bueno: se puede mostrar como recomendado
-        # para que el usuario revise manualmente el precio por rango/cantidad.
         return candidato
 
     return None
@@ -447,35 +622,40 @@ def construir_resultado_para_excel(
     producto_ingles: str,
     total_unit: int | float | str,
     price: float | str,
+    link_original: str = "",
+    usar_titulo_original: bool = True,
     usar_made_in_china: bool = True,
     margen_precio: float = 20,
 ) -> dict[str, Any]:
     """Devuelve una fila lista para rellenar columnas nuevas del Excel."""
-    candidatos = buscar_candidatos(
+    candidatos, original_info = buscar_candidatos(
         producto_ingles=producto_ingles,
         total_unit=total_unit,
         price=price,
+        link_original=link_original,
+        usar_titulo_original=usar_titulo_original,
         usar_made_in_china=usar_made_in_china,
     )
 
+    titulo_original = str(original_info.get("title") or "").strip()
+    referencia_busqueda = titulo_original or producto_ingles
+
     if not candidatos:
         return {
+            "TITULO_LINK_ORIGINAL": titulo_original,
             "LINK_RECOMENDADO": "",
             "PLATAFORMA_RESULTADO": "",
             "PRECIO_ENCONTRADO": "",
             "COINCIDENCIA_PRODUCTO": "Baja",
-            "MOTIVO_SELECCION": "No se encontró una página directa de producto. La URL de búsqueda queda solo como referencia, no como recomendación.",
+            "MOTIVO_SELECCION": "No se encontró una página directa de producto. Se mantiene la búsqueda de referencia como apoyo manual.",
             "LINK_ALTERNATIVO_1": "",
             "LINK_ALTERNATIVO_2": "",
-            "URL_BUSQUEDA_REFERENCIA": _url_referencia_compuesta(producto_ingles, usar_made_in_china),
+            "URL_BUSQUEDA_REFERENCIA": _url_referencia_compuesta(referencia_busqueda, usar_made_in_china),
         }
 
-    # En V4 no basta con que sea una página directa: si el precio detectado
-    # está muy separado del PRICE, no debe quedar como recomendado.
     mejor_global = candidatos[0]
     recomendado = _primer_candidato_recomendable(candidatos, margen_precio)
 
-    # Las alternativas son apoyo manual. Pueden quedar fuera de precio, pero no se aprueban automáticamente.
     enlaces_alternativos = []
     for candidato in candidatos:
         link = candidato.get("link", "")
@@ -501,7 +681,7 @@ def construir_resultado_para_excel(
                 "Se deja como alternativa, no como link recomendado."
             )
             coincidencia = "Baja"
-        elif score_mejor < 75:
+        elif score_mejor < 70:
             motivo = "Se encontraron páginas directas, pero la coincidencia del producto fue insuficiente. Revisar alternativas manualmente."
             coincidencia = "Baja"
         else:
@@ -509,6 +689,7 @@ def construir_resultado_para_excel(
             coincidencia = "Baja"
 
         return {
+            "TITULO_LINK_ORIGINAL": titulo_original,
             "LINK_RECOMENDADO": "",
             "PLATAFORMA_RESULTADO": "",
             "PRECIO_ENCONTRADO": "" if precio_mejor in [None, ""] else precio_mejor,
@@ -516,24 +697,31 @@ def construir_resultado_para_excel(
             "MOTIVO_SELECCION": motivo,
             "LINK_ALTERNATIVO_1": mejor_global.get("link", ""),
             "LINK_ALTERNATIVO_2": alt1 if alt1 != mejor_global.get("link", "") else alt2,
-            "URL_BUSQUEDA_REFERENCIA": _url_referencia_compuesta(producto_ingles, usar_made_in_china),
+            "URL_BUSQUEDA_REFERENCIA": _url_referencia_compuesta(referencia_busqueda, usar_made_in_china),
         }
 
     score_producto = float(recomendado.get("score_producto") or 0)
+    score_original = float(recomendado.get("score_vs_original") or 0)
     diferencia = recomendado.get("diferencia_precio")
     precio = recomendado.get("precio_detectado")
 
     if precio not in [None, ""] and diferencia not in [None, ""] and _precio_dentro_margen(diferencia, margen_precio):
         coincidencia = "Alta"
-        motivo = f"Página directa de producto, alta similitud y precio dentro del margen ±{margen_precio}%."
-    elif score_producto >= 75 and precio in [None, ""]:
+        motivo = f"Página directa de producto, similitud suficiente y precio dentro del margen ±{margen_precio}%."
+    elif score_producto >= 70 and precio in [None, ""]:
         coincidencia = "Media"
-        motivo = "Página directa de producto con alta similitud, pero no se pudo detectar precio. Revisar precio por cantidad antes de aprobar."
+        motivo = "Página directa de producto con similitud suficiente, pero no se pudo detectar precio. Revisar precio por cantidad antes de aprobar."
     else:
         coincidencia = "Media"
         motivo = "Página directa de producto posiblemente compatible. Revisar precio, cantidad y especificaciones."
 
+    if titulo_original:
+        motivo += f" Referencia usada: título del link original. Coincidencia con título original: {round(score_original, 2)}%."
+    else:
+        motivo += " Referencia usada: DESCRIPTION NUEVA INGLES, porque no se pudo leer título claro del link original."
+
     return {
+        "TITULO_LINK_ORIGINAL": titulo_original,
         "LINK_RECOMENDADO": recomendado.get("link", ""),
         "PLATAFORMA_RESULTADO": recomendado.get("platform", ""),
         "PRECIO_ENCONTRADO": "" if precio in [None, ""] else precio,
@@ -541,5 +729,5 @@ def construir_resultado_para_excel(
         "MOTIVO_SELECCION": motivo,
         "LINK_ALTERNATIVO_1": alt1,
         "LINK_ALTERNATIVO_2": alt2,
-        "URL_BUSQUEDA_REFERENCIA": _url_referencia_compuesta(producto_ingles, usar_made_in_china),
+        "URL_BUSQUEDA_REFERENCIA": _url_referencia_compuesta(referencia_busqueda, usar_made_in_china),
     }
