@@ -1,0 +1,25 @@
+PROVEEDOR IA - INSTRUCCIONES PARA WINDOWS
+=========================================
+
+1. Descomprime todo el archivo ZIP en una carpeta.
+2. Instala Node.js 20 o superior desde https://nodejs.org si aun no lo tienes.
+3. Haz doble clic en INSTALAR-Y-EJECUTAR.bat.
+4. El instalador te pedira tu OPENAI_API_KEY de forma oculta.
+5. El navegador abrira http://localhost:3000.
+
+La API key no viene incluida en el proyecto. Debes crear la tuya en:
+https://platform.openai.com/api-keys
+
+IMPORTANTE
+----------
+- ChatGPT Plus no incluye saldo para la API.
+- La cuenta API necesita facturacion o saldo activo.
+- No compartas tu archivo .env.local.
+- La hoja debe estar en formato .xlsx.
+
+Columnas requeridas:
+- DESCRIPTION NUEVA ESPAÑOL
+- DESCRIPTION NUEVA INGLES
+- TOTAL UNIT
+- PRICE
+- LINKS ORIGINAL
