@@ -3,9 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "powershell -ExecutionPolicy Bypass -File scripts/dev-local.ps1",
+    "dev:next": "next dev",
+    "stop": "powershell -ExecutionPolicy Bypass -File scripts/stop-local.ps1",
     "build": "next build",
     "start": "next start",
+    "diagnostico": "powershell -ExecutionPolicy Bypass -File scripts/diagnostico-local.ps1",
     "lint": "next lint",
     "typecheck": "tsc --noEmit"
   },

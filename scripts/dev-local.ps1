@@ -1,4 +1,5 @@
 $ErrorActionPreference = "Stop"
+
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $ProjectRoot
 
@@ -6,6 +7,9 @@ function Stop-WithMessage {
     param([string]$Message)
     Write-Host ""
     Write-Host $Message -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Presiona Enter para cerrar esta terminal."
+    Read-Host | Out-Null
     exit 1
 }
 
@@ -20,38 +24,22 @@ function Test-EnvFileHasKey {
     return $content -match "(?m)^OPENAI_API_KEY=sk-[^\s]+$"
 }
 
-function Save-EnvEverywhere {
-    param([string]$Contents)
-
+function Sync-ProjectEnvFromUserStore {
     $userConfigDir = Join-Path $env:LOCALAPPDATA "ProveedorIA"
-    $projectEnvPath = Join-Path $ProjectRoot ".env.local"
     $userEnvPath = Join-Path $userConfigDir ".env.local"
-
-    if (-not (Test-Path -LiteralPath $userConfigDir)) {
-        New-Item -ItemType Directory -Path $userConfigDir | Out-Null
-    }
-
-    [IO.File]::WriteAllText($projectEnvPath, $Contents, [Text.UTF8Encoding]::new($false))
-    [IO.File]::WriteAllText($userEnvPath, $Contents, [Text.UTF8Encoding]::new($false))
-}
-
-function Sync-EnvFiles {
-    $userConfigDir = Join-Path $env:LOCALAPPDATA "ProveedorIA"
     $projectEnvPath = Join-Path $ProjectRoot ".env.local"
-    $userEnvPath = Join-Path $userConfigDir ".env.local"
 
     if (Test-EnvFileHasKey $projectEnvPath) {
         if (-not (Test-Path -LiteralPath $userConfigDir)) {
             New-Item -ItemType Directory -Path $userConfigDir | Out-Null
         }
         Copy-Item -LiteralPath $projectEnvPath -Destination $userEnvPath -Force
-        Write-Host "Se encontro una API key configurada en .env.local." -ForegroundColor Green
         return $true
     }
 
     if (Test-EnvFileHasKey $userEnvPath) {
         Copy-Item -LiteralPath $userEnvPath -Destination $projectEnvPath -Force
-        Write-Host "Se reutilizo la API key guardada localmente." -ForegroundColor Green
+        Write-Host "Se copio la API key guardada localmente a .env.local." -ForegroundColor Green
         return $true
     }
 
@@ -124,49 +112,29 @@ function Get-AvailablePort {
     return $null
 }
 
-if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
-    Stop-WithMessage "Node.js no esta instalado. Instala Node.js 20 o superior desde https://nodejs.org y vuelve a ejecutar este archivo."
-}
-
-$nodeVersion = (& node.exe --version).Trim()
-Write-Host "Node.js detectado: $nodeVersion" -ForegroundColor Green
-
-$hasKey = Sync-EnvFiles
-
-if (-not $hasKey) {
-    Write-Host ""
-    Write-Host "Crea o copia tu API key desde: https://platform.openai.com/api-keys"
-    Write-Host "La clave se guardara en .env.local y tambien en tu usuario local para reutilizarla en futuras copias del proyecto."
-    $secureKey = Read-Host "Pega tu OPENAI_API_KEY" -AsSecureString
-    $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
-
-    try {
-        $apiKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
-    }
-    finally {
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)
-    }
-
-    if ([string]::IsNullOrWhiteSpace($apiKey) -or -not $apiKey.StartsWith("sk-")) {
-        Stop-WithMessage "La clave no parece valida. Debe comenzar con sk-."
-    }
-
-    $envContents = "OPENAI_API_KEY=$apiKey`r`nOPENAI_MODEL=gpt-5.4-mini`r`n"
-    Save-EnvEverywhere $envContents
-    $apiKey = $null
-    Write-Host ".env.local creado correctamente." -ForegroundColor Green
-}
-
 Write-Host ""
-Write-Host "Instalando dependencias..." -ForegroundColor Cyan
-& npm.cmd install
-if ($LASTEXITCODE -ne 0) {
-    Stop-WithMessage "npm install fallo. Comprueba tu conexion a internet e intenta nuevamente."
+Write-Host "Iniciando Proveedor IA desde VSCode/consola..." -ForegroundColor Cyan
+Write-Host "Carpeta del proyecto: $ProjectRoot"
+
+if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
+    Stop-WithMessage "Node.js no esta instalado. Instala Node.js 20 o superior desde https://nodejs.org"
+}
+
+if (-not (Test-Path -LiteralPath "node_modules")) {
+    Stop-WithMessage "No se encontro node_modules. Ejecuta primero: npm install"
 }
 
 $nextPath = Join-Path $ProjectRoot "node_modules\.bin\next.cmd"
 if (-not (Test-Path -LiteralPath $nextPath)) {
-    Stop-WithMessage "No se encontro Next.js instalado. Ejecuta npm install nuevamente."
+    Stop-WithMessage "No se encontro Next.js instalado. Ejecuta primero: npm install"
+}
+
+$hasKey = Sync-ProjectEnvFromUserStore
+if (-not $hasKey) {
+    Write-Host ""
+    Write-Host "Aviso: no existe .env.local con OPENAI_API_KEY en esta carpeta ni en el guardado local." -ForegroundColor Yellow
+    Write-Host "La pantalla abrira, pero las busquedas con IA fallaran hasta configurar OPENAI_API_KEY."
+    Write-Host "Puedes configurarla ejecutando: .\INSTALAR-Y-EJECUTAR.bat"
 }
 
 $lockPath = Join-Path $ProjectRoot ".next\dev\lock"
@@ -177,12 +145,13 @@ if (Test-FileLocked $lockPath) {
     Write-Host ""
     Write-Host "Ya hay un servidor de desarrollo de este proyecto ejecutandose." -ForegroundColor Yellow
     if ($first) {
-        Write-Host "Abriendo http://localhost:$($first.Port)" -ForegroundColor Green
-        Start-Process "http://localhost:$($first.Port)"
+        Write-Host "Puedes abrir: http://localhost:$($first.Port)" -ForegroundColor Green
+        Write-Host "PID detectado: $($first.PID)"
     }
     Write-Host ""
-    Write-Host "Si quieres reiniciarlo desde cero, cierra esta ventana y ejecuta en VSCode:" -ForegroundColor Cyan
+    Write-Host "Si quieres reiniciarlo desde cero, ejecuta primero:" -ForegroundColor Cyan
     Write-Host "npm run stop" -ForegroundColor Yellow
+    Write-Host "y luego:"
     Write-Host "npm run dev" -ForegroundColor Yellow
     exit 0
 }
@@ -193,15 +162,9 @@ if (-not $port) {
 }
 
 Write-Host ""
-Write-Host "El proyecto se abrira en http://localhost:$port" -ForegroundColor Green
-Write-Host "Para detenerlo, presiona Ctrl+C en esta ventana." -ForegroundColor Yellow
+Write-Host "Servidor local: http://localhost:$port" -ForegroundColor Green
+Write-Host "Para detenerlo, presiona Ctrl+C." -ForegroundColor Yellow
 Write-Host ""
-
-Start-Job -ArgumentList $port -ScriptBlock {
-    param([int]$Port)
-    Start-Sleep -Seconds 3
-    Start-Process "http://localhost:$Port"
-} | Out-Null
 
 & $nextPath dev -p $port
 

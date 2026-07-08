@@ -9,6 +9,7 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState<string>();
   const [fileName, setFileName] = useState("");
   const [notice, setNotice] = useState("");
+  const [searchingAll, setSearchingAll] = useState(false);
 
   const selected = useMemo(
     () => rows.find((row) => row.id === selectedId) ?? rows[0],
@@ -18,6 +19,7 @@ export default function Home() {
   async function handleFile(file?: File) {
     if (!file) return;
     setNotice("");
+    setSearchingAll(false);
     try {
       const products = await readProducts(file);
       setRows(products);
@@ -31,38 +33,42 @@ export default function Home() {
     }
   }
 
-  async function searchRow(id: string) {
-    const product = rows.find((row) => row.id === id);
-    if (!product || product.status === "buscando") return;
+  async function requestAlternatives(product: ProductRow) {
+    const response = await fetch("/api/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(product),
+    });
+
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "La búsqueda falló.");
+    return payload as SearchResult;
+  }
+
+  async function searchProduct(product: ProductRow) {
+    if (product.status === "buscando") return;
 
     setRows((current) =>
       current.map((row) =>
-        row.id === id
+        row.id === product.id
           ? { ...row, status: "buscando", error: undefined }
           : row,
       ),
     );
 
     try {
-      const response = await fetch("/api/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(product),
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "La búsqueda falló.");
-
+      const result = await requestAlternatives(product);
       setRows((current) =>
         current.map((row) =>
-          row.id === id
-            ? { ...row, status: "listo", result: payload as SearchResult }
+          row.id === product.id
+            ? { ...row, status: "listo", result }
             : row,
         ),
       );
     } catch (error) {
       setRows((current) =>
         current.map((row) =>
-          row.id === id
+          row.id === product.id
             ? {
                 ...row,
                 status: "error",
@@ -74,7 +80,32 @@ export default function Home() {
     }
   }
 
+  async function searchRow(id: string) {
+    const product = rows.find((row) => row.id === id);
+    if (!product || searchingAll) return;
+    await searchProduct(product);
+  }
+
+  async function searchAllRows() {
+    if (searchingAll || rows.length === 0) return;
+
+    setSearchingAll(true);
+    setNotice("Buscando alternativas para todos los productos, uno por uno.");
+
+    const productsToSearch = rows.filter((row) => row.status !== "buscando");
+    try {
+      for (const product of productsToSearch) {
+        setSelectedId(product.id);
+        await searchProduct(product);
+      }
+      setNotice("Búsqueda de todos los productos finalizada.");
+    } finally {
+      setSearchingAll(false);
+    }
+  }
+
   const completed = rows.filter((row) => row.status === "listo").length;
+  const hasRows = rows.length > 0;
 
   return (
     <main>
@@ -109,7 +140,7 @@ export default function Home() {
         {notice && <p className="notice">{notice}</p>}
       </section>
 
-      {rows.length > 0 && (
+      {hasRows && (
         <div className="workspace">
           <aside className="card sidebar">
             <div className="sectionHeading">
@@ -117,11 +148,20 @@ export default function Home() {
                 <h2>2. Productos</h2>
                 <p className="muted">{completed} de {rows.length} revisados</p>
               </div>
-              {completed > 0 && (
-                <button className="ghost" onClick={() => exportResults(rows)}>
-                  Exportar
+              <div className="sidebarActions">
+                <button
+                  className="primary compact"
+                  disabled={searchingAll}
+                  onClick={searchAllRows}
+                >
+                  {searchingAll ? "Buscando todos…" : "Buscar todos"}
                 </button>
-              )}
+                {completed > 0 && (
+                  <button className="ghost" onClick={() => exportResults(rows)}>
+                    Exportar
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="rowList">
@@ -153,7 +193,7 @@ export default function Home() {
                   </div>
                   <button
                     className="primary"
-                    disabled={selected.status === "buscando"}
+                    disabled={selected.status === "buscando" || searchingAll}
                     onClick={() => searchRow(selected.id)}
                   >
                     {selected.status === "buscando"
@@ -240,7 +280,7 @@ export default function Home() {
         </div>
       )}
 
-      {rows.length === 0 && (
+      {!hasRows && (
         <section className="emptyState">
           <span>01</span>
           <h2>Empieza con la hoja que ya conoces</h2>
