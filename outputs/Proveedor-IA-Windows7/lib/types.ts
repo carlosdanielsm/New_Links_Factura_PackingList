@@ -14,7 +14,6 @@ export type ProductInput = {
   originalLink: string;
 };
 
-
 export type Candidate = {
   title: string;
   url: string;

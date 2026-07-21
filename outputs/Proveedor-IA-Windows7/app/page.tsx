@@ -108,12 +108,15 @@ export default function Home() {
   const hasRows = rows.length > 0;
 
   function rowStatusClass(row: ProductRow) {
-    if (row.status === "buscando") return "buscando";
-    if (row.status === "listo") {
-      return row.result?.candidates.length ? "listo" : "sin-enlaces";
+    if (!row.originalLink) {
+      return "sin-enlaces";
     }
-    if (row.status === "error") return "sin-enlaces";
-    return "pendiente";
+
+    if (row.status === "listo" && row.result && row.result.candidates.length === 0) {
+      return "sin-enlaces";
+    }
+
+    return row.status;
   }
 
   return (
